@@ -86,6 +86,8 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	log.Println(userProfile.handle + " joined")
+
 	defer userProfile.close()
 
 	for {
@@ -95,6 +97,7 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 		cmd = strings.Trim(cmd, "\n")
+		log.Println("Processing command ", cmd)
 
 		if cmd == SHOW_USERS_COMMAND {
 			users := getAllOnlineUsers()
@@ -128,7 +131,7 @@ func validChatMessage(message string) bool {
 
 func (profile *UserProfile) close() {
 	delete(connections, profile.handle)
-	*profile = nil
+	profile = nil
 }
 
 func handleMessages(userProfile *UserProfile, message string) {
