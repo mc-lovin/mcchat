@@ -128,10 +128,8 @@ func handleMessages(userProfile *UserProfile, message string) {
 		return
 	}
 
-	userProfile.rw.WriteString("ack\n")
-
 	rw := toUserProfile.rw
-	rw.WriteString(message + "\n")
+	rw.WriteString(userProfile.handle + " : " + message + "\n")
 	rw.Flush()
 }
 
@@ -157,18 +155,24 @@ func handleRegistration(rw *bufio.ReadWriter) (userProfile *UserProfile, e error
 	return connections[cmd], nil
 }
 
-func client(ip string) {
-	rw, _ := Open(ip + Port)
-	fmt.Println("Choose a handle, be cool")
+func clientScanner(rw *bufio.ReadWriter) {
+	// TODO kill this when client kills itself
 	inputScanner := bufio.NewScanner(os.Stdin)
 	for inputScanner.Scan() {
 		input := inputScanner.Text()
-		log.Println("scanned ... ", input)
 		rw.WriteString(input + "\n")
 		rw.Flush()
+	}
+}
+
+func client(ip string) {
+	rw, _ := Open(ip + Port)
+	fmt.Println("Choose a handle, be cool")
+	go clientScanner(rw)
+	for {
 		response, _ := rw.ReadString('\n')
 		response = strings.Trim(response, "\n")
-		log.Println("response", response)
+		fmt.Println(response)
 		if response == "Handle Already Taken" {
 			break
 		}
