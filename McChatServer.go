@@ -17,7 +17,9 @@ type UserProfile struct {
 }
 
 const (
-	Port = ":14610"
+	Port               = ":14610"
+	SHOW_USERS_COMMAND = "SHOW USERS"
+	DUPLICATE_HANDLE   = "Handle Already In Use"
 )
 
 var (
@@ -27,9 +29,12 @@ var (
 func NewUserProfile(name string) error {
 	_, ok := connections[name]
 	if ok {
-		return errors.New("Handle already in use")
+		return errors.New(DUPLICATE_HANDLE)
 	}
-	connections[name] = &UserProfile{handle: name}
+
+	connections[name] = &UserProfile{
+		handle: name,
+	}
 	return nil
 }
 
@@ -42,22 +47,22 @@ func getAllOnlineUsers() (ret string) {
 }
 
 func Open(addr string) (*bufio.ReadWriter, error) {
-	log.Println("Connecting to addr ", addr)
-
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, errors.New("Dialing Failed")
 	}
+
 	return bufio.NewReadWriter(bufio.NewReader(conn),
 		bufio.NewWriter(conn)), nil
 }
 
-type HandleFunc func(*bufio.ReadWriter)
-
 func Listen() error {
-	listener, _ := net.Listen("tcp", Port)
+	listener, err := net.Listen("tcp", Port)
+	if err != nil {
+		return errors.New("Not able to accept connections atm")
+	}
+
 	for {
-		log.Println("waiting for a connection")
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println("Error accepting a connection")
@@ -73,16 +78,14 @@ func handleConnection(conn net.Conn) {
 		bufio.NewWriter(conn))
 	defer conn.Close()
 
-	log.Println("handling messages")
-
 	userProfile, error := handleRegistration(rw)
 
 	if error != nil {
-		fmt.Println("we are here")
-		rw.WriteString("Handle Already Taken\n")
+		rw.WriteString(error.Error() + "\n")
 		rw.Flush()
 		return
 	}
+
 	defer userProfile.close()
 
 	for {
@@ -92,62 +95,67 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 		cmd = strings.Trim(cmd, "\n")
-		if cmd == "SHOW USERS" {
+
+		if cmd == SHOW_USERS_COMMAND {
 			users := getAllOnlineUsers()
 			rw.WriteString(users + "\n")
 			rw.Flush()
-			continue
+		} else if ok := validChatMessage(cmd); ok {
+			handleMessages(userProfile, cmd)
+		} else {
+			rw.WriteString("Please Enter ValidUser: Message\n")
+			rw.Flush()
 		}
-		fmt.Println("reading", cmd)
-		handleMessages(userProfile, cmd)
 	}
+}
+
+func Trim(str string) string {
+	return strings.Trim(str, " \n")
+}
+
+func validChatMessage(message string) bool {
+	tokens := strings.SplitN(message, ":", 2)
+
+	if len(tokens) != 2 {
+		return false
+	}
+
+	to, message := Trim(tokens[0]), Trim(tokens[1])
+	_, ok := connections[to]
+
+	return ok && len(message) > 0
 }
 
 func (profile *UserProfile) close() {
 	delete(connections, profile.handle)
-	profile = nil
+	*profile = nil
 }
 
 func handleMessages(userProfile *UserProfile, message string) {
-
 	tokens := strings.SplitN(message, ":", 2)
-	if len(tokens) < 2 {
-		rw := userProfile.rw
-		rw.WriteString("Bad Input or user does not exist\n")
-		rw.Flush()
-		return
-	}
-	to, message := tokens[0], tokens[1]
-	fmt.Println("to message ", to, message)
-
-	toUserProfile, ok := connections[to]
-	if !ok {
-		rw := userProfile.rw
-		rw.WriteString("Bad Input or user does not exist\n")
-		rw.Flush()
-		return
-	}
+	to, message := Trim(tokens[0]), Trim(tokens[1])
+	toUserProfile := connections[to]
 
 	rw := toUserProfile.rw
 	rw.WriteString(userProfile.handle + " : " + message + "\n")
 	rw.Flush()
 }
 
-func handleRegistration(rw *bufio.ReadWriter) (userProfile *UserProfile, e error) {
+func handleRegistration(rw *bufio.ReadWriter) (userProfile *UserProfile,
+	e error) {
 	cmd, err := rw.ReadString('\n')
 	if err != nil {
-		log.Println("Terminated or Errored")
 		return nil, err
 	}
-	cmd = strings.Trim(cmd, "\n")
+
+	cmd = Trim(cmd)
 	err = NewUserProfile(cmd)
 	if err != nil {
 		return nil, err
 	}
+
 	userProfile = connections[cmd]
 	userProfile.rw = rw
-
-	fmt.Println(connections)
 
 	rw.WriteString(getAllOnlineUsers() + "\n")
 	rw.Flush()
@@ -155,25 +163,35 @@ func handleRegistration(rw *bufio.ReadWriter) (userProfile *UserProfile, e error
 	return connections[cmd], nil
 }
 
-func clientScanner(rw *bufio.ReadWriter) {
-	// TODO kill this when client kills itself
+func clientScanner(rw *bufio.ReadWriter, done chan bool) {
 	inputScanner := bufio.NewScanner(os.Stdin)
 	for inputScanner.Scan() {
-		input := inputScanner.Text()
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		input := Trim(inputScanner.Text())
 		rw.WriteString(input + "\n")
 		rw.Flush()
 	}
 }
 
 func client(ip string) {
+
 	rw, _ := Open(ip + Port)
 	fmt.Println("Choose a handle, be cool")
-	go clientScanner(rw)
+
+	done := make(chan bool)
+	go clientScanner(rw, done)
+
 	for {
-		response, _ := rw.ReadString('\n')
+		response, err := rw.ReadString('\n')
 		response = strings.Trim(response, "\n")
 		fmt.Println(response)
-		if response == "Handle Already Taken" {
+		if err != nil || response == DUPLICATE_HANDLE {
+			done <- true
 			break
 		}
 	}
